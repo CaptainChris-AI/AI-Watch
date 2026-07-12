@@ -1,11 +1,10 @@
 """
-pdf_report.py — A5 横版 鉴定报告卡 PDF 生成（PyMuPDF / fitz）
-图文平铺，可打印。内嵌该证书二维码。
+pdf_report.py — A5 横版 鉴定报告卡 PDF（PyMuPDF / fitz）
+样式参考 Report Test.pdf：米色底 + 金色描边、CX logo、双栏「基本資訊 / 功能參數」、
+右侧 QR + 印章 + 检验师/复检师签名、底部金色地址栏。
+第 2 页起为 鑑定內容 + 鑑定說明（长文本自动分页）。
 
-页1：品牌头 + 检测编号/日期/有效期 + 细节图平铺 + 基本信息 + 样品结论 + 二维码
-页2+：鉴定内容 + 鉴定说明（长文本自动分页平铺）
-
-中文使用 PyMuPDF 内置 CJK 字体 "china-s"。
+中文（含繁体）使用 PyMuPDF 内置 CJK 字体 "china-s"。
 """
 from __future__ import annotations
 
@@ -13,14 +12,11 @@ import io
 import fitz  # PyMuPDF
 from pathlib import Path
 
+import watch_db as db
 from styles import BRAND_TITLE, ENG_SUBTITLE
 
-# A5 横版（points）
 PAGE_W = 595.28
 PAGE_H = 419.53
-MARGIN = 22
-HEADER_H = 66
-
 CJK = "china-s"
 
 
@@ -29,22 +25,33 @@ def _hex(h: str):
     return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
-NAVY = _hex("#2B3A52")
-GOLD = _hex("#C0A16B")
+CREAM = _hex("#F7F1E2")
+BORDER = _hex("#4A3A28")
+GOLD = _hex("#B4924E")
+GOLD_UL = _hex("#CBB37C")
+GOLD_BAR = _hex("#C2A468")
+DARK = _hex("#2E2618")
+GREY = _hex("#8B8371")
 WHITE = (1, 1, 1)
-DARK = _hex("#1E2B45")
-GREY = _hex("#8A8F99")
-LINE = _hex("#E2E2E6")
+LINE = _hex("#E3D9C2")
 
 
-def _ctext(page, cx, y, text, font, size, color):
-    """以 cx 为水平中心，用 insert_text 绘制（短框不丢字）。"""
+# ── helpers ──────────────────────────────────────────────────────────────────
+def _cv(cert, key) -> str:
+    try:
+        keys = cert.keys()
+    except Exception:
+        keys = cert
+    val = cert[key] if key in keys else ""
+    return "" if val is None else str(val)
+
+
+def _ctext(page, cx, y, text, color, size, font=CJK):
     w = fitz.get_text_length(text, fontname=font, fontsize=size)
     page.insert_text((cx - w / 2, y), text, fontname=font, fontsize=size, color=color)
 
 
-def _wrap(text: str, size: float, max_w: float) -> list[str]:
-    """按字符贪心换行（适合中英混排/CJK 无空格）。"""
+def _wrap(text: str, size: float, max_w: float, max_lines: int | None = None) -> list[str]:
     lines: list[str] = []
     for para in (text or "").split("\n"):
         if para == "":
@@ -58,197 +65,192 @@ def _wrap(text: str, size: float, max_w: float) -> list[str]:
                 lines.append(cur)
                 cur = ch
         lines.append(cur)
+    if max_lines and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        if lines:
+            lines[-1] = lines[-1][:-1] + "…"
     return lines
 
 
-def _draw_header(page, cert, logo_path: str | None, slim: bool = False):
-    h = 40 if slim else HEADER_H
-    page.draw_rect(fitz.Rect(0, 0, PAGE_W, h), color=None, fill=NAVY)
-    x = MARGIN
-    if logo_path and Path(logo_path).exists():
-        try:
-            lh = 26 if slim else 40
-            page.insert_image(
-                fitz.Rect(x, (h - lh) / 2, x + lh, (h - lh) / 2 + lh),
-                filename=logo_path, keep_proportion=True,
-            )
-            x += lh + 12
-        except Exception:
-            pass
-    ty = 22 if slim else 28
-    page.insert_text((x, ty), BRAND_TITLE, fontname=CJK,
-                     fontsize=15 if slim else 18, color=WHITE)
-    if not slim:
-        page.insert_text((x, 48), ENG_SUBTITLE, fontname="helv",
-                         fontsize=8, color=GOLD)
+def _bg_and_border(page):
+    page.draw_rect(fitz.Rect(0, 0, PAGE_W, PAGE_H), color=None, fill=CREAM)
+    page.draw_rect(fitz.Rect(9, 9, PAGE_W - 9, PAGE_H - 9),
+                   color=BORDER, width=3.2, radius=0.03)
+    page.draw_rect(fitz.Rect(15, 15, PAGE_W - 15, PAGE_H - 15),
+                   color=GOLD, width=1, radius=0.03)
 
 
-def _draw_summary_strip(page, cert, y):
-    """检测编号 / 鉴定日期 / 有效期至 三列。"""
-    box = fitz.Rect(MARGIN, y, PAGE_W - MARGIN, y + 40)
-    page.draw_rect(box, color=LINE, fill=(0.98, 0.98, 0.99), width=0.5)
-    cols = [
-        ("检测编号", cert["cert_no"]),
-        ("鉴定日期", cert["inspect_date"] or "-"),
-        ("有效期至", cert["valid_until"] or "-"),
-    ]
-    cw = (box.width) / 3
-    for i, (label, val) in enumerate(cols):
-        cx = box.x0 + i * cw + cw / 2
-        _ctext(page, cx, y + 15, label, CJK, 8, GREY)
-        _ctext(page, cx, y + 31, str(val), CJK, 11, DARK)
-        if i > 0:
-            page.draw_line((box.x0 + i * cw, y + 8),
-                           (box.x0 + i * cw, y + 32), color=LINE, width=0.5)
-    return box.y1
-
-
-def _draw_images(page, images, rect):
-    """在 rect 内 2 列网格平铺所有细节图。"""
-    page.insert_text((rect.x0, rect.y0 + 9), "细节图片",
-                     fontname=CJK, fontsize=9, color=GOLD)
-    grid = fitz.Rect(rect.x0, rect.y0 + 16, rect.x1, rect.y1)
-    n = len(images)
-    if n == 0:
-        _ctext(page, (grid.x0 + grid.x1) / 2, grid.y0 + 30, "（无图片）",
-               CJK, 9, GREY)
+def _img(page, rect, asset, keep=True):
+    """asset = (bytes, mime) or None."""
+    if not asset:
         return
-    cols = 2 if n > 1 else 1
-    rows = (n + cols - 1) // cols
-    gap = 6
-    cw = (grid.width - (cols - 1) * gap) / cols
-    ch = (grid.height - (rows - 1) * gap) / rows
-    for idx, (blob, _mime) in enumerate(images):
-        r = idx // cols
-        c = idx % cols
-        cell = fitz.Rect(
-            grid.x0 + c * (cw + gap), grid.y0 + r * (ch + gap),
-            grid.x0 + c * (cw + gap) + cw, grid.y0 + r * (ch + gap) + ch,
-        )
-        page.draw_rect(cell, color=LINE, width=0.5)
-        try:
-            page.insert_image(cell, stream=blob, keep_proportion=True)
-        except Exception:
-            pass
+    try:
+        page.insert_image(rect, stream=asset[0], keep_proportion=keep)
+    except Exception:
+        pass
 
 
-def _draw_info(page, cert, rect, qr_png: bytes | None):
-    """右侧：样品结论 + 基本信息 + 二维码。"""
-    y = rect.y0
-    # 样品结论
-    page.insert_text((rect.x0, y + 9), "样品结论", fontname=CJK, fontsize=9, color=GOLD)
-    y += 15
-    concl = cert["sample_conclusion"] or "-"
-    page.insert_text((rect.x0, y + 14), concl, fontname=CJK, fontsize=14, color=DARK)
-    y += 26
-    # 基本信息
-    page.insert_text((rect.x0, y + 9), "基本信息", fontname=CJK, fontsize=9, color=GOLD)
-    y += 16
-    fields = [
-        ("品牌", cert["brand"]), ("型号", cert["model"]),
-        ("尺寸", cert["size"]), ("表壳编号", cert["case_no"]),
-        ("机芯编号", cert["movement_no"]), ("表壳材质", cert["case_material"]),
-        ("备注", cert["remark"]),
-    ]
-    label_w = 56
-    val_w = rect.width - label_w - 6
-    size = 9
-    for label, val in fields:
-        val = (val or "-")
-        vlines = _wrap(val, size, val_w)
-        row_h = max(14, len(vlines) * (size + 3) + 3)
-        page.insert_text((rect.x0, y + size), label, fontname=CJK,
-                         fontsize=size, color=GREY)
-        vy = y + size
+# ── field columns ────────────────────────────────────────────────────────────
+def _draw_col(page, x, w, heading, rows, y0, label_w=46):
+    page.insert_text((x, y0), heading, fontname=CJK, fontsize=12, color=GOLD)
+    page.draw_line((x, y0 + 5), (x + w, y0 + 5), color=GOLD_UL, width=1.2)
+    val_x = x + label_w
+    val_w = w - label_w
+    y = y0 + 20
+    for label, value in rows:
+        page.insert_text((x, y + 8), label, fontname=CJK, fontsize=9, color=GOLD)
+        vlines = _wrap(str(value) or "—", 9, val_w, max_lines=2)
+        vy = y + 8
         for ln in vlines:
-            page.insert_text((rect.x0 + label_w, vy), ln, fontname=CJK,
-                             fontsize=size, color=DARK)
-            vy += size + 3
-        y += row_h
-        page.draw_line((rect.x0, y - 3), (rect.x1, y - 3), color=LINE, width=0.4)
+            page.insert_text((val_x, vy), ln, fontname=CJK, fontsize=9, color=DARK)
+            vy += 11
+        y += max(21, len(vlines) * 11 + 6)
+    return y
 
-    # 二维码（右下角）
+
+# ── page 1 ───────────────────────────────────────────────────────────────────
+def _page1(page, cert, images, qr_png, logo_path, assets):
+    _bg_and_border(page)
+
+    # header
+    if logo_path and Path(logo_path).exists():
+        _img(page, fitz.Rect(26, 24, 104, 66), (Path(logo_path).read_bytes(), "image/jpeg"))
+    page.insert_text((114, 47), BRAND_TITLE, fontname=CJK, fontsize=18, color=DARK)
+    page.insert_text((115, 63), ENG_SUBTITLE, fontname="helv", fontsize=9, color=GOLD)
+
+    page.insert_text((378, 40), "檢測報告編號", fontname=CJK, fontsize=8, color=GOLD)
+    page.insert_text((378, 57), cert["cert_no"], fontname=CJK, fontsize=10, color=DARK)
+    page.insert_text((480, 40), "報告日期", fontname=CJK, fontsize=8, color=GOLD)
+    page.insert_text((480, 57), _cv(cert, "inspect_date") or "—",
+                     fontname=CJK, fontsize=10, color=DARK)
+    page.draw_line((24, 70), (PAGE_W - 24, 70), color=GOLD_UL, width=0.9)
+
+    # photos (big + 2x2 grid)
+    page.draw_rect(fitz.Rect(22, 78, 180, 186), color=LINE, width=0.6)
+    if images:
+        _img(page, fitz.Rect(22, 78, 180, 186), images[0])
+    grid = images[1:5]
+    gx, gy, gw, gh, gap = 22, 192, 158, 158, 5
+    cw = (gw - gap) / 2
+    ch = (gh - gap) / 2
+    for i in range(4):
+        r, c = divmod(i, 2)
+        cell = fitz.Rect(gx + c * (cw + gap), gy + r * (ch + gap),
+                         gx + c * (cw + gap) + cw, gy + r * (ch + gap) + ch)
+        page.draw_rect(cell, color=LINE, width=0.6)
+        if i < len(grid):
+            _img(page, cell, grid[i])
+
+    # field columns
+    basic = [
+        ("品牌", _cv(cert, "brand")), ("型號", _cv(cert, "model")),
+        ("結論", _cv(cert, "sample_conclusion")), ("狀態", _cv(cert, "status")),
+        ("機芯號", _cv(cert, "movement_no")), ("表身號", _cv(cert, "case_no")),
+        ("保卡資訊", _cv(cert, "warranty_card_info")), ("產地", _cv(cert, "origin")),
+    ]
+    func = [
+        ("材質", _cv(cert, "case_material")), ("錶帶", _cv(cert, "strap")),
+        ("直徑", _cv(cert, "size")), ("防水", _cv(cert, "water_resistance")),
+        ("功能", _cv(cert, "functions")), ("附件", _cv(cert, "accessories")),
+        ("擺幅", _cv(cert, "amplitude")), ("數據", _cv(cert, "data_metrics")),
+    ]
+    _draw_col(page, 192, 150, "基本資訊", basic, 92)
+    _draw_col(page, 352, 124, "功能參數", func, 92)
+
+    # right zone: QR + stamp + signatures
     if qr_png:
-        qs = 74
-        qr_rect = fitz.Rect(rect.x1 - qs, rect.y1 - qs, rect.x1, rect.y1)
-        try:
-            page.insert_image(qr_rect, stream=qr_png)
-            page.insert_textbox(
-                fitz.Rect(rect.x1 - qs - 90, rect.y1 - qs, rect.x1 - qs - 4, rect.y1),
-                "扫码查看\n电子报告", fontname=CJK, fontsize=8, color=GREY,
-                align=fitz.TEXT_ALIGN_RIGHT,
-            )
-        except Exception:
-            pass
+        _img(page, fitz.Rect(484, 80, 542, 138), (qr_png, "image/png"))
+    if assets.get("stamp"):
+        _img(page, fitz.Rect(482, 144, 544, 206), assets["stamp"])
+
+    def _sig(label, name, sig, y):
+        page.insert_text((480, y), label, fontname=CJK, fontsize=9.5, color=GOLD)
+        if sig:
+            _img(page, fitz.Rect(478, y + 4, 572, y + 30), sig)
+        if name:
+            _ctext(page, 525, y + 46, name, DARK, 9.5)
+
+    _sig("檢驗師", db.get_setting("inspector_name", ""),
+         assets.get("inspector_signature"), 224)
+    _sig("複檢師", db.get_setting("reviewer_name", ""),
+         assets.get("reviewer_signature"), 286)
+
+    # disclaimer
+    disc = f"鑑定結果或結論僅對送檢樣品負責，{BRAND_TITLE}保留最終決定權。"
+    page.insert_text((192, 358), _wrap(disc, 7.5, 278, max_lines=1)[0],
+                     fontname=CJK, fontsize=7.5, color=GREY)
+
+    # bottom address bar
+    page.draw_rect(fitz.Rect(15, 372, PAGE_W - 15, 402), color=None, fill=GOLD_BAR)
+    mid = PAGE_W / 2
+
+    def _addr(text, x0, x1):
+        if not text:
+            return
+        center = (x0 + x1) / 2
+        w = fitz.get_text_length(text, fontname=CJK, fontsize=7)
+        sx = center - w / 2
+        page.draw_circle((sx - 8, 388), 2.2, color=None, fill=WHITE)
+        page.insert_text((sx, 391), text, fontname=CJK, fontsize=7, color=WHITE)
+
+    _addr(assets.get("address_left", ""), 40, mid - 6)
+    _addr(assets.get("address_right", ""), mid + 6, PAGE_W - 24)
 
 
-def _flow_section(doc, state, title, paragraphs, cert, logo_path):
-    """把标题+段落平铺流式写入，越界自动新建页。state=[page,y]。"""
-    size = 9
-    leading = size + 4
-    max_w = PAGE_W - 2 * MARGIN
-    bottom = PAGE_H - MARGIN
+# ── flow pages (content + notes) ─────────────────────────────────────────────
+def _flow_section(doc, state, title, paragraphs):
+    size = 9.5
+    leading = size + 4.5
+    margin = 30
+    max_w = PAGE_W - 2 * margin
+    bottom = PAGE_H - 28
 
     def new_page():
         p = doc.new_page(width=PAGE_W, height=PAGE_H)
-        _draw_header(p, cert, logo_path, slim=True)
-        return p, 40 + 16
+        _bg_and_border(p)
+        p.insert_text((margin, 40), BRAND_TITLE, fontname=CJK, fontsize=13, color=GOLD)
+        p.draw_line((margin, 46), (PAGE_W - margin, 46), color=GOLD_UL, width=0.9)
+        return p, 66
 
     page, y = state
     if page is None:
         page, y = new_page()
-
-    # 标题
-    if y + 18 > bottom:
+    if y + 20 > bottom:
         page, y = new_page()
-    page.insert_text((MARGIN, y + 11), title, fontname=CJK, fontsize=11, color=GOLD)
-    page.draw_line((MARGIN, y + 16), (PAGE_W - MARGIN, y + 16), color=GOLD, width=0.6)
-    y += 24
-
+    page.insert_text((margin, y + 11), title, fontname=CJK, fontsize=12, color=GOLD)
+    page.draw_line((margin, y + 16), (PAGE_W - margin, y + 16), color=GOLD_UL, width=0.7)
+    y += 26
     for para in paragraphs:
         for ln in _wrap(para, size, max_w):
             if y + leading > bottom:
                 page, y = new_page()
-            page.insert_text((MARGIN, y + size), ln, fontname=CJK,
-                             fontsize=size, color=DARK)
+            page.insert_text((margin, y + size), ln, fontname=CJK, fontsize=size, color=DARK)
             y += leading
-        y += 3  # 段间距
+        y += 3
     state[0], state[1] = page, y
 
 
-def generate_report_pdf(cert, images, notes, qr_png=None,
-                        logo_path=None) -> bytes:
-    """
-    cert: sqlite3.Row / dict（含 CERT_FIELDS）
-    images: [(bytes, mime), ...]
-    notes: list[str] 鉴定说明
-    qr_png: bytes 二维码 PNG
-    logo_path: 品牌 logo 路径
-    返回 PDF 字节。
-    """
+# ── entry ────────────────────────────────────────────────────────────────────
+def generate_report_pdf(cert, images, notes, qr_png=None, logo_path=None) -> bytes:
+    assets = {
+        "inspector_signature": db.get_asset("inspector_signature"),
+        "reviewer_signature": db.get_asset("reviewer_signature"),
+        "stamp": db.get_asset("stamp"),
+        "address_left": db.get_setting("address_left", ""),
+        "address_right": db.get_setting("address_right", ""),
+    }
+
     doc = fitz.open()
     page = doc.new_page(width=PAGE_W, height=PAGE_H)
-    _draw_header(page, cert, logo_path)
+    _page1(page, cert, images, qr_png, logo_path, assets)
 
-    y = _draw_summary_strip(page, cert, HEADER_H + 8)
-    body_top = y + 10
-    body_bottom = PAGE_H - MARGIN
-
-    # 左：图片；右：信息
-    mid = MARGIN + (PAGE_W - 2 * MARGIN) * 0.46
-    img_rect = fitz.Rect(MARGIN, body_top, mid - 8, body_bottom)
-    info_rect = fitz.Rect(mid + 8, body_top, PAGE_W - MARGIN, body_bottom)
-    _draw_images(page, images, img_rect)
-    _draw_info(page, cert, info_rect, qr_png)
-
-    # 页2+：鉴定内容 + 鉴定说明
     state = [None, 0]
-    content = cert["inspect_content"] or ""
+    content = _cv(cert, "inspect_content")
     if content.strip():
-        _flow_section(doc, state, "鉴定内容", content.split("\n"), cert, logo_path)
+        _flow_section(doc, state, "鑑定內容", content.split("\n"))
     if notes:
         numbered = [f"{i}. {n}" for i, n in enumerate(notes, 1)]
-        _flow_section(doc, state, "鉴定说明", numbered, cert, logo_path)
+        _flow_section(doc, state, "鑑定說明", numbered)
 
     out = io.BytesIO()
     doc.save(out, garbage=4, deflate=True)

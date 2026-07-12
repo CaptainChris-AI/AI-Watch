@@ -52,6 +52,9 @@ DEFAULT_NOTES = [
 
 DEFAULT_COMPANY_INTRO = "HGSTC 名表国检中心，专注于名贵钟表鉴定检测，提供权威、专业、可追溯的第三方鉴定服务。"
 
+DEFAULT_ADDRESS_LEFT = "香港尖沙咀赫德道6号好德商業大廈10楼A室"
+DEFAULT_ADDRESS_RIGHT = "深圳市羅湖區寶安南路1036號鼎豐大廈16樓1623室"
+
 
 def init_db():
     """初始化所有表，并写入默认的鉴定说明 / 公司简介。幂等。"""
@@ -71,6 +74,15 @@ def init_db():
             valid_until       TEXT DEFAULT '',           -- 有效期至 YYYY-MM-DD
             sample_conclusion TEXT DEFAULT '',           -- 样品结论（如 正品）
             inspect_content   TEXT DEFAULT '',           -- 鉴定内容（长文本）
+            status            TEXT DEFAULT '',           -- 状态（如 已使用品/全新）
+            warranty_card_info TEXT DEFAULT '',          -- 保卡资讯
+            origin            TEXT DEFAULT '',           -- 产地
+            strap             TEXT DEFAULT '',           -- 表带
+            water_resistance  TEXT DEFAULT '',           -- 防水
+            functions         TEXT DEFAULT '',           -- 功能
+            accessories       TEXT DEFAULT '',           -- 附件
+            amplitude         TEXT DEFAULT '',           -- 摆幅
+            data_metrics      TEXT DEFAULT '',           -- 数据（走时等）
             created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -95,13 +107,47 @@ def init_db():
             key   TEXT PRIMARY KEY,
             value TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS report_assets (
+            key   TEXT PRIMARY KEY,
+            image BLOB,
+            mime  TEXT DEFAULT 'image/png'
+        );
         """)
+
+    # 迁移：给已有的 certificates 表补齐新列（幂等）
+    _migrate_cert_columns()
 
     # 默认设置
     if get_setting("inspection_notes") is None:
         set_setting("inspection_notes", json.dumps(DEFAULT_NOTES, ensure_ascii=False))
     if get_setting("company_intro") is None:
         set_setting("company_intro", DEFAULT_COMPANY_INTRO)
+    if get_setting("address_left") is None:
+        set_setting("address_left", DEFAULT_ADDRESS_LEFT)
+    if get_setting("address_right") is None:
+        set_setting("address_right", DEFAULT_ADDRESS_RIGHT)
+
+
+_MIGRATE_COLUMNS = [
+    ("status", "TEXT DEFAULT ''"),
+    ("warranty_card_info", "TEXT DEFAULT ''"),
+    ("origin", "TEXT DEFAULT ''"),
+    ("strap", "TEXT DEFAULT ''"),
+    ("water_resistance", "TEXT DEFAULT ''"),
+    ("functions", "TEXT DEFAULT ''"),
+    ("accessories", "TEXT DEFAULT ''"),
+    ("amplitude", "TEXT DEFAULT ''"),
+    ("data_metrics", "TEXT DEFAULT ''"),
+]
+
+
+def _migrate_cert_columns():
+    with get_conn() as c:
+        existing = {r["name"] for r in c.execute("PRAGMA table_info(certificates)")}
+        for col, decl in _MIGRATE_COLUMNS:
+            if col not in existing:
+                c.execute(f"ALTER TABLE certificates ADD COLUMN {col} {decl}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,6 +191,8 @@ CERT_FIELDS = [
     "cert_no", "brand", "model", "size", "case_no", "movement_no",
     "case_material", "remark", "inspect_date", "valid_until",
     "sample_conclusion", "inspect_content",
+    "status", "warranty_card_info", "origin", "strap", "water_resistance",
+    "functions", "accessories", "amplitude", "data_metrics",
 ]
 
 
@@ -279,3 +327,31 @@ def list_company_members() -> list:
         return c.execute(
             "SELECT * FROM company_members ORDER BY sort_order"
         ).fetchall()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# report_assets（检验师/复检师 签名图、印章）
+# ─────────────────────────────────────────────────────────────────────────────
+def get_asset(key: str):
+    """返回 (bytes, mime) 或 None。"""
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT image, mime FROM report_assets WHERE key=?", (key,)
+        ).fetchone()
+    if row and row["image"]:
+        return row["image"], row["mime"]
+    return None
+
+
+def set_asset(key: str, image: bytes, mime: str = "image/png"):
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO report_assets(key,image,mime) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET image=excluded.image, mime=excluded.mime",
+            (key, image, mime),
+        )
+
+
+def delete_asset(key: str):
+    with get_conn() as c:
+        c.execute("DELETE FROM report_assets WHERE key=?", (key,))

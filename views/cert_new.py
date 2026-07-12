@@ -38,20 +38,32 @@ def render():
         cert_no = c1.text_input("检测编号 *", placeholder="如 2619170707")
         brand = c2.text_input("品牌", placeholder="如 理查米尔")
         model = c1.text_input("型号", placeholder="如 RM11-03 CA ATZ")
-        size = c2.text_input("尺寸", placeholder="如 44.5×49.94mm")
-        case_no = c1.text_input("表壳编号")
-        movement_no = c2.text_input("机芯编号")
-        case_material = c1.text_input("表壳材质", placeholder="如 白色陶瓷+TPT")
-        remark = c2.text_input("备注")
+        status = c2.text_input("状态", placeholder="如 已使用品 / 全新")
+        case_no = c1.text_input("表身号", placeholder="表身/表壳编号")
+        movement_no = c2.text_input("机芯号")
+        origin = c1.text_input("产地", placeholder="如 瑞士")
+        warranty_card_info = c2.text_input("保卡资讯", placeholder="如 销售日期 2020年10月")
         d1, d2 = st.columns(2)
         inspect_date = d1.date_input("鉴定日期", value=datetime.date.today())
         valid_until = d2.date_input(
             "有效期至", value=datetime.date.today() + datetime.timedelta(days=180))
 
-        st.subheader("③ 鉴定结论")
-        sample_conclusion = st.text_input("样品结论", placeholder="如 正品")
+        st.subheader("③ 功能参数")
+        f1, f2 = st.columns(2)
+        case_material = f1.text_input("材质", placeholder="如 白色陶瓷+TPT")
+        strap = f2.text_input("表带", placeholder="如 橡胶带+钛质折叠扣")
+        size = f1.text_input("直径 / 尺寸", placeholder="如 44.5×49.94mm")
+        water_resistance = f2.text_input("防水")
+        functions = f1.text_input("功能", placeholder="如 计时/日期")
+        accessories = f2.text_input("附件", placeholder="如 保卡、说明书、表盒")
+        amplitude = f1.text_input("摆幅")
+        data_metrics = f2.text_input("数据", placeholder="如 走时误差 -2s/d 至 0s/d")
+        remark = st.text_input("备注")
 
-        st.subheader("④ 鉴定内容")
+        st.subheader("④ 鉴定结论")
+        sample_conclusion = st.text_input("样品结论（结论）", placeholder="如 正品")
+
+        st.subheader("⑤ 鉴定内容")
         inspect_content = st.text_area("鉴定内容", height=200,
                                        placeholder="详细描述外观、机芯、功能检测情况等")
 
@@ -74,6 +86,10 @@ def render():
             "valid_until": valid_until.strftime("%Y-%m-%d"),
             "sample_conclusion": sample_conclusion,
             "inspect_content": inspect_content,
+            "status": status, "warranty_card_info": warranty_card_info,
+            "origin": origin, "strap": strap, "water_resistance": water_resistance,
+            "functions": functions, "accessories": accessories,
+            "amplitude": amplitude, "data_metrics": data_metrics,
         }
         db.create_certificate(data, images)
         st.success(f"✅ 证书「{cert_no}」已创建（{len(images)} 张图片）。"

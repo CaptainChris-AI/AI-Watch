@@ -31,6 +31,75 @@ def render():
 
     st.divider()
 
+    # 报告卡设置：检验师 / 复检师 签名、印章、地址
+    st.subheader("报告卡设置（检验师 / 复检师 / 印章 / 地址）")
+    st.caption("以下内容用于报告卡 PDF 的签名、盖章与底部地址。")
+
+    def _sig_block(key, label, name_key):
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            name = st.text_input(f"{label} 姓名", value=db.get_setting(name_key, ""),
+                                 key=f"name_{name_key}")
+            up = st.file_uploader(f"{label} 签名图（PNG，建议透明背景）",
+                                  type=["png", "jpg", "jpeg"], key=f"up_{key}")
+            b1, b2 = st.columns(2)
+            if b1.button(f"保存{label}", key=f"save_{key}"):
+                db.set_setting(name_key, name)
+                if up:
+                    blob, mime = read_upload(up)
+                    db.set_asset(key, blob, mime)
+                st.success("已保存")
+                st.rerun()
+            if b2.button(f"删除{label}签名", key=f"del_{key}"):
+                db.delete_asset(key)
+                st.rerun()
+        with col2:
+            cur = db.get_asset(key)
+            if cur:
+                st.image(cur[0], caption="当前签名", use_container_width=True)
+            else:
+                st.caption("无签名图")
+
+    _sig_block("inspector_signature", "检验师", "inspector_name")
+    st.markdown("---")
+    _sig_block("reviewer_signature", "复检师", "reviewer_name")
+
+    st.markdown("---")
+    st.markdown("**印章**")
+    sc1, sc2 = st.columns([2, 1])
+    with sc1:
+        stamp_up = st.file_uploader("印章图（PNG，建议透明背景）",
+                                    type=["png", "jpg", "jpeg"], key="up_stamp")
+        b1, b2 = st.columns(2)
+        if b1.button("保存印章"):
+            if stamp_up:
+                blob, mime = read_upload(stamp_up)
+                db.set_asset("stamp", blob, mime)
+                st.success("已保存")
+                st.rerun()
+            else:
+                st.warning("请先选择印章图片")
+        if b2.button("删除印章"):
+            db.delete_asset("stamp")
+            st.rerun()
+    with sc2:
+        cur = db.get_asset("stamp")
+        if cur:
+            st.image(cur[0], caption="当前印章", use_container_width=True)
+        else:
+            st.caption("无印章")
+
+    st.markdown("---")
+    st.markdown("**底部地址（报告卡下方）**")
+    addr_l = st.text_input("地址一（左）", value=db.get_setting("address_left", ""))
+    addr_r = st.text_input("地址二（右）", value=db.get_setting("address_right", ""))
+    if st.button("💾 保存地址"):
+        db.set_setting("address_left", addr_l)
+        db.set_setting("address_right", addr_r)
+        st.success("已保存")
+
+    st.divider()
+
     # 鉴定师列表
     st.subheader("鉴定师")
     members = db.list_company_members()

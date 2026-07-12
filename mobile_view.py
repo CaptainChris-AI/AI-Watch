@@ -169,10 +169,20 @@ def _esc(s):
 
 
 def _tab_basic(cert):
+    def cv(k):
+        try:
+            return cert[k] if k in cert.keys() else ""
+        except Exception:
+            return ""
     fields = [
-        ("品牌", cert["brand"]), ("型号", cert["model"]), ("尺寸", cert["size"]),
-        ("表壳编号", cert["case_no"]), ("机芯编号", cert["movement_no"]),
-        ("表壳材质", cert["case_material"]), ("备注", cert["remark"]),
+        ("品牌", cv("brand")), ("型号", cv("model")), ("状态", cv("status")),
+        ("机芯号", cv("movement_no")), ("表身号", cv("case_no")),
+        ("产地", cv("origin")), ("保卡资讯", cv("warranty_card_info")),
+        ("材质", cv("case_material")), ("表带", cv("strap")),
+        ("直径", cv("size")), ("防水", cv("water_resistance")),
+        ("功能", cv("functions")), ("附件", cv("accessories")),
+        ("摆幅", cv("amplitude")), ("数据", cv("data_metrics")),
+        ("备注", cv("remark")),
     ]
     rows = "".join(
         f'<div class="hg-row"><div class="k">{k}</div>'
