@@ -31,38 +31,51 @@ def render():
 
     st.divider()
 
-    # 报告卡设置：检验师 / 复检师 签名、印章、地址
-    st.subheader("报告卡设置（检验师 / 复检师 / 印章 / 地址）")
-    st.caption("以下内容用于报告卡 PDF 的签名、盖章与底部地址。")
+    # 报告卡设置：鉴定师（师傅）、印章、地址
+    st.subheader("鉴定师（师傅）管理")
+    st.caption("录入证书时可下拉选择检验师 / 复检师；此处维护师傅姓名与签名图。")
 
-    def _sig_block(key, label, name_key):
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            name = st.text_input(f"{label} 姓名", value=db.get_setting(name_key, ""),
-                                 key=f"name_{name_key}")
-            up = st.file_uploader(f"{label} 签名图（PNG，建议透明背景）",
-                                  type=["png", "jpg", "jpeg"], key=f"up_{key}")
-            b1, b2 = st.columns(2)
-            if b1.button(f"保存{label}", key=f"save_{key}"):
-                db.set_setting(name_key, name)
+    for m in db.list_masters():
+        with st.container(border=True):
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                nm = st.text_input("姓名", value=m["name"], key=f"mn_{m['id']}")
+                up = st.file_uploader("更换签名图（PNG，建议透明背景）",
+                                      type=["png", "jpg", "jpeg"], key=f"ms_{m['id']}")
+                b1, b2 = st.columns(2)
+                if b1.button("保存", key=f"msave_{m['id']}"):
+                    if up:
+                        blob, mime = read_upload(up)
+                        db.update_master(m["id"], nm, blob, mime)
+                    else:
+                        db.update_master(m["id"], nm)
+                    st.success("已保存")
+                    st.rerun()
+                if b2.button("🗑 删除", key=f"mdel_{m['id']}"):
+                    db.delete_master(m["id"])
+                    st.rerun()
+            with col2:
+                if m["signature"]:
+                    st.image(m["signature"], caption="当前签名", use_container_width=True)
+                else:
+                    st.caption("无签名图")
+
+    with st.form("add_master", clear_on_submit=True):
+        st.markdown("**➕ 新增师傅**")
+        nm = st.text_input("姓名 *")
+        up = st.file_uploader("签名图（PNG，建议透明背景；留空则自动生成随机签名）",
+                              type=["png", "jpg", "jpeg"])
+        if st.form_submit_button("新增", type="primary"):
+            if not nm.strip():
+                st.error("姓名必填")
+            else:
                 if up:
                     blob, mime = read_upload(up)
-                    db.set_asset(key, blob, mime)
-                st.success("已保存")
+                    db.add_master(nm.strip(), blob, mime)
+                else:
+                    db.add_master(nm.strip(), db._gen_signature(nm.strip()))
+                st.success("已新增")
                 st.rerun()
-            if b2.button(f"删除{label}签名", key=f"del_{key}"):
-                db.delete_asset(key)
-                st.rerun()
-        with col2:
-            cur = db.get_asset(key)
-            if cur:
-                st.image(cur[0], caption="当前签名", use_container_width=True)
-            else:
-                st.caption("无签名图")
-
-    _sig_block("inspector_signature", "检验师", "inspector_name")
-    st.markdown("---")
-    _sig_block("reviewer_signature", "复检师", "reviewer_name")
 
     st.markdown("---")
     st.markdown("**印章**")

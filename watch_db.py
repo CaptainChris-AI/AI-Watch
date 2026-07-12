@@ -113,6 +113,14 @@ def init_db():
             image BLOB,
             mime  TEXT DEFAULT 'image/png'
         );
+
+        CREATE TABLE IF NOT EXISTS masters (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            signature  BLOB,
+            mime       TEXT DEFAULT 'image/png',
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
         """)
 
     # 迁移：给已有的 certificates 表补齐新列（幂等）
@@ -128,6 +136,11 @@ def init_db():
     if get_setting("address_right") is None:
         set_setting("address_right", DEFAULT_ADDRESS_RIGHT)
 
+    # 预置两位师傅（仅当没有任何师傅时）
+    if not list_masters():
+        add_master("蔡新", _gen_signature("蔡新-inspector"))
+        add_master("蔡新新", _gen_signature("蔡新新-reviewer"))
+
 
 _MIGRATE_COLUMNS = [
     ("status", "TEXT DEFAULT ''"),
@@ -139,6 +152,8 @@ _MIGRATE_COLUMNS = [
     ("accessories", "TEXT DEFAULT ''"),
     ("amplitude", "TEXT DEFAULT ''"),
     ("data_metrics", "TEXT DEFAULT ''"),
+    ("inspector_master", "TEXT DEFAULT ''"),
+    ("reviewer_master", "TEXT DEFAULT ''"),
 ]
 
 
@@ -193,6 +208,7 @@ CERT_FIELDS = [
     "sample_conclusion", "inspect_content",
     "status", "warranty_card_info", "origin", "strap", "water_resistance",
     "functions", "accessories", "amplitude", "data_metrics",
+    "inspector_master", "reviewer_master",
 ]
 
 
@@ -355,3 +371,89 @@ def set_asset(key: str, image: bytes, mime: str = "image/png"):
 def delete_asset(key: str):
     with get_conn() as c:
         c.execute("DELETE FROM report_assets WHERE key=?", (key,))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# masters（鉴定师 / 师傅：检验师、复检师可下拉选择）
+# ─────────────────────────────────────────────────────────────────────────────
+def list_masters() -> list:
+    with get_conn() as c:
+        return c.execute("SELECT * FROM masters ORDER BY sort_order").fetchall()
+
+
+def get_master(mid: str):
+    if not mid:
+        return None
+    with get_conn() as c:
+        return c.execute("SELECT * FROM masters WHERE id=?", (mid,)).fetchone()
+
+
+def add_master(name: str, signature: bytes | None = None, mime: str = "image/png") -> str:
+    mid = _new_id()
+    with get_conn() as c:
+        nxt = c.execute(
+            "SELECT COALESCE(MAX(sort_order),-1)+1 AS n FROM masters"
+        ).fetchone()["n"]
+        c.execute(
+            "INSERT INTO masters(id,name,signature,mime,sort_order) VALUES(?,?,?,?,?)",
+            (mid, name, signature, mime, nxt),
+        )
+    return mid
+
+
+def update_master(mid: str, name: str,
+                  signature: bytes | None = None, mime: str | None = None):
+    with get_conn() as c:
+        if signature is not None:
+            c.execute(
+                "UPDATE masters SET name=?,signature=?,mime=? WHERE id=?",
+                (name, signature, mime or "image/png", mid),
+            )
+        else:
+            c.execute("UPDATE masters SET name=? WHERE id=?", (name, mid))
+
+
+def delete_master(mid: str):
+    with get_conn() as c:
+        c.execute("DELETE FROM masters WHERE id=?", (mid,))
+
+
+def _gen_signature(seed: str) -> bytes:
+    """用 PIL 生成一个随机手写风格的签名 PNG（透明背景）。seed 决定形状，稳定可复现。"""
+    import io as _io
+    import math
+    import random
+    from PIL import Image, ImageDraw
+
+    rnd = random.Random(seed)
+    W, H = 360, 120
+    im = Image.new("RGBA", (W, H), (255, 255, 255, 0))
+    d = ImageDraw.Draw(im)
+    ink = (25, 30, 60, 255)
+    y0 = H * 0.58
+    freq = rnd.uniform(5.5, 9.5)
+    phase = rnd.uniform(0, 3.14)
+    amp = rnd.uniform(16, 28)
+    tilt = rnd.uniform(-0.10, 0.10)
+    steps = 160
+    path = []
+    for s in range(steps + 1):
+        t = s / steps
+        px = 24 + t * (W - 60)
+        env = math.sin(t * math.pi)  # 两端收窄
+        py = y0 + math.sin(t * freq * math.pi + phase) * amp * env + (t - 0.5) * (W * tilt)
+        path.append((px, py))
+    d.line(path, fill=ink, width=4, joint="curve")
+    # 末尾一个上挑的花体
+    ex, ey = path[-1]
+    flourish = [(ex, ey)]
+    for k in range(24):
+        a = k / 24
+        flourish.append((ex + a * 46, ey - math.sin(a * math.pi) * rnd.uniform(28, 40)))
+    d.line(flourish, fill=ink, width=3, joint="curve")
+    # 一条底部横划
+    d.line([(28, y0 + amp * 0.7), (W - 46, y0 + amp * 0.7 + rnd.uniform(-4, 4))],
+           fill=ink, width=2)
+    buf = _io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()

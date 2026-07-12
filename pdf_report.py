@@ -154,8 +154,15 @@ def _page1(page, cert, images, qr_png, logo_path, assets):
         ("功能", _cv(cert, "functions")), ("附件", _cv(cert, "accessories")),
         ("擺幅", _cv(cert, "amplitude")), ("數據", _cv(cert, "data_metrics")),
     ]
-    _draw_col(page, 192, 150, "基本資訊", basic, 92)
-    _draw_col(page, 352, 124, "功能參數", func, 92)
+    yb = _draw_col(page, 192, 150, "基本資訊", basic, 92)
+    yf = _draw_col(page, 352, 124, "功能參數", func, 92)
+
+    # 鑑定內容（仅标题 + 扫码提示，详细内容扫码查看）—— 放在双栏下方居中区域
+    cy = min(max(yb, yf) + 8, 318)
+    page.insert_text((192, cy + 10), "鑑定內容", fontname=CJK, fontsize=11, color=GOLD)
+    page.draw_line((192, cy + 15), (476, cy + 15), color=GOLD_UL, width=0.9)
+    page.insert_text((192, cy + 31), "詳細鑑定內容請掃描右側二維碼查看。",
+                     fontname=CJK, fontsize=9, color=DARK)
 
     # right zone: QR + stamp + signatures
     if qr_png:
@@ -170,9 +177,9 @@ def _page1(page, cert, images, qr_png, logo_path, assets):
         if name:
             _ctext(page, 525, y + 46, name, DARK, 9.5)
 
-    _sig("檢驗師", db.get_setting("inspector_name", ""),
+    _sig("檢驗師", assets.get("inspector_name", ""),
          assets.get("inspector_signature"), 224)
-    _sig("複檢師", db.get_setting("reviewer_name", ""),
+    _sig("複檢師", assets.get("reviewer_name", ""),
          assets.get("reviewer_signature"), 286)
 
     # disclaimer
@@ -232,9 +239,15 @@ def _flow_section(doc, state, title, paragraphs):
 
 # ── entry ────────────────────────────────────────────────────────────────────
 def generate_report_pdf(cert, images, notes, qr_png=None, logo_path=None) -> bytes:
+    insp = db.get_master(_cv(cert, "inspector_master"))
+    rev = db.get_master(_cv(cert, "reviewer_master"))
     assets = {
-        "inspector_signature": db.get_asset("inspector_signature"),
-        "reviewer_signature": db.get_asset("reviewer_signature"),
+        "inspector_name": insp["name"] if insp else "",
+        "inspector_signature": (insp["signature"], insp["mime"])
+        if insp and insp["signature"] else None,
+        "reviewer_name": rev["name"] if rev else "",
+        "reviewer_signature": (rev["signature"], rev["mime"])
+        if rev and rev["signature"] else None,
         "stamp": db.get_asset("stamp"),
         "address_left": db.get_setting("address_left", ""),
         "address_right": db.get_setting("address_right", ""),
@@ -244,10 +257,8 @@ def generate_report_pdf(cert, images, notes, qr_png=None, logo_path=None) -> byt
     page = doc.new_page(width=PAGE_W, height=PAGE_H)
     _page1(page, cert, images, qr_png, logo_path, assets)
 
+    # 第 2 页起：仅 鑑定說明（鑑定內容 详细内容不入 PDF，扫码查看）
     state = [None, 0]
-    content = _cv(cert, "inspect_content")
-    if content.strip():
-        _flow_section(doc, state, "鑑定內容", content.split("\n"))
     if notes:
         numbered = [f"{i}. {n}" for i, n in enumerate(notes, 1)]
         _flow_section(doc, state, "鑑定說明", numbered)

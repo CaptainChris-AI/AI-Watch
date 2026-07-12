@@ -67,6 +67,18 @@ def render():
         inspect_content = st.text_area("鉴定内容", height=200,
                                        placeholder="详细描述外观、机芯、功能检测情况等")
 
+        st.subheader("⑥ 签发师傅")
+        _masters = db.list_masters()
+        _ids = [""] + [m["id"] for m in _masters]
+        _name = {"": "（未指定）"}
+        for m in _masters:
+            _name[m["id"]] = m["name"]
+        s1, s2 = st.columns(2)
+        inspector_master = s1.selectbox("检验师", _ids,
+                                        format_func=lambda x: _name.get(x, x))
+        reviewer_master = s2.selectbox("复检师", _ids,
+                                       format_func=lambda x: _name.get(x, x))
+
         submitted = st.form_submit_button("保存证书", type="primary",
                                           use_container_width=True)
 
@@ -90,6 +102,7 @@ def render():
             "origin": origin, "strap": strap, "water_resistance": water_resistance,
             "functions": functions, "accessories": accessories,
             "amplitude": amplitude, "data_metrics": data_metrics,
+            "inspector_master": inspector_master, "reviewer_master": reviewer_master,
         }
         db.create_certificate(data, images)
         st.success(f"✅ 证书「{cert_no}」已创建（{len(images)} 张图片）。"
