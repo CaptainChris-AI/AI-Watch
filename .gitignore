@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+watch_cert.db
+watch_cert.db-*
+uploads/
+.DS_Store
+.streamlit/secrets.toml
